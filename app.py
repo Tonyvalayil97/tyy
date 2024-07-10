@@ -62,31 +62,31 @@ for message in st.session_state.chat_history:
     with st.chat_message(message["role"]):
         st.markdown(message["message"])
 
-if uploaded_file is not None:
-    if not os.path.isfile("files/"+uploaded_file.name+".pdf"):
-        with st.status("Analyzing your document..."):
-            bytes_data = uploaded_file.read()
-            f = open("files/"+uploaded_file.name+".pdf", "wb")
-            f.write(bytes_data)
-            f.close()
-            loader = PyPDFLoader("files/"+uploaded_file.name+".pdf")
-            data = loader.load()
+if uploaded_file :
 
-            # Initialize text splitter
-            text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=1500,
-                chunk_overlap=200,
-                length_function=len
-            )
-            all_splits = text_splitter.split_documents(data)
+    file_name = uploaded_file.name.lower()
+    file_name = f"{file_name if file_name.endswith('.pdf') else file_name + '.pdf'}"
+    file_path = os.path.join('files', file_name)
+    processed_marker_path = f"{file_path}.processed"
 
-            # Create and persist the vector store
-            st.session_state.vectorstore = Chroma.from_documents(
-                documents=all_splits,
-                embedding=OllamaEmbeddings(model="mistral")
-            )
+  
+    if not os.path.isfile(processed_marker_path):  # Check if the processed marker file exists
+        with st.spinner("Analyzing your document..."):
+            bytes_data = uploaded_file.getvalue()
+            with open(file_path, "wb") as f:
+                f.write(bytes_data)
+            data = PyPDFLoader(file_path).load()
+            splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=200, length_function=len)
+            document_splits = splitter.split_documents(data)
+            st.session_state.vectorstore = Chroma.from_documents(documents=document_splits, embedding=OllamaEmbeddings(model="mistral"))
             st.session_state.vectorstore.persist()
 
+            # Create a processed marker file
+            with open(processed_marker_path, "w") as marker_file:
+                marker_file.write("Processed")
+            st.success("Document processed and indexed successfully.")
+    else:
+        st.info(f"The document {file_name} has already been processed.")
     st.session_state.retriever = st.session_state.vectorstore.as_retriever()
     # Initialize the QA chain
     if 'qa_chain' not in st.session_state:

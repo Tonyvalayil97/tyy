@@ -1,61 +1,81 @@
+# streamlit_app.py (or whatever you name your main Streamlit file)
+
 import streamlit as st
-import requests
-import fitz  # PyMuPDF for PDF text extraction
-from PIL import Image
-import pytesseract
+import ollama
+import io
+import tempfile
+import os
+import base64
+import PyPDF2  # Ensure this is in your requirements.txt
 
-# Ollama Mistral API endpoint (replace with your setup details)
-OLLAMA_URL = "http://localhost:11434/v1/ask"
+def get_ollama_response(prompt, model="mistral"):
+    """Gets a response from the Ollama model."""
+    try:
+        response = ollama.chat(model=model, messages=[{'role': 'user', 'content': prompt}], stream=True)
+        full_response = ""
+        for chunk in response:
+            if 'message' in chunk and 'content' in chunk['message']:
+                full_response += chunk['message']['content']
+                yield chunk['message']['content']
+        return full_response
 
-def extract_text_from_pdf(file):
-    # Open the PDF file and extract text from it
-    doc = fitz.open(file)
+    except Exception as e:
+        yield f"Error: {e}"
+        return f"Error: {e}"
+
+def extract_text_from_pdf(file_path):
+    """Extracts text from a PDF file."""
     text = ""
-    for page in doc:
-        text += page.get_text()
+    try:
+        with open(file_path, "rb") as file:
+            reader = PyPDF2.PdfReader(file)
+            for page in reader.pages:
+                text += page.extract_text() or ""
+    except Exception as e:
+        st.error(f"Error extracting text from PDF: {e}")
+        return ""
     return text
 
-def extract_text_from_image(file):
-    # Use Tesseract to extract text from image
-    image = Image.open(file)
-    text = pytesseract.image_to_string(image)
-    return text
+def extract_info_from_invoice(invoice_content, user_prompt):
+    """Extracts information from the invoice using Ollama and the user's prompt."""
+    combined_prompt = f"Here is the invoice content:\n\n{invoice_content}\n\nUser prompt: {user_prompt}\n\nExtract and provide the requested information."
 
-def ask_mistral_model(prompt, extracted_text):
-    # Query the Mistral model with the prompt and extracted invoice text
-    payload = {
-        "input": f"Extract details from the following invoice based on the prompt: {prompt}\nInvoice Text:\n{extracted_text}"
-    }
-    response = requests.post(OLLAMA_URL, json=payload)
-    if response.status_code == 200:
-        return response.json().get('text')
-    else:
-        return "Error in processing the request"
+    return get_ollama_response(combined_prompt)
+
+def display_pdf(file_bytes):
+    """Displays a PDF in the Streamlit app."""
+    base64_pdf = base64.b64encode(file_bytes).decode('utf-8')
+    pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="700" height="1000" type="application/pdf"></iframe>'
+    st.markdown(pdf_display, unsafe_allow_html=True)
 
 def main():
     st.title("Invoice Information Extractor")
 
-    # Upload an invoice file (PDF or Image)
-    uploaded_file = st.file_uploader("Upload your invoice", type=["pdf", "png", "jpg", "jpeg"])
+    uploaded_file = st.file_uploader("Upload an invoice (PDF)", type=["pdf"])
+    user_prompt = st.text_area("Enter your prompt (e.g., 'What is the total amount?', 'What is the invoice number?', 'List all items purchased.')")
 
-    if uploaded_file is not None:
-        # Extract text based on the file type
-        if uploaded_file.type == "application/pdf":
-            extracted_text = extract_text_from_pdf(uploaded_file)
-        else:
-            extracted_text = extract_text_from_image(uploaded_file)
+    if uploaded_file is not None and user_prompt:
+        try:
+            file_bytes = uploaded_file.read()
 
-        st.subheader("Extracted Text")
-        st.text_area("Invoice Text", extracted_text, height=300)
+            # Display the uploaded PDF
+            display_pdf(file_bytes)
 
-        # Input prompt for the Mistral model
-        prompt = st.text_input("Enter your prompt to extract info", "Please extract invoice number, amount, and weight.")
+            # Extract text from PDF
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+                tmp_file.write(file_bytes)
+                tmp_file_path = tmp_file.name
 
-        if prompt:
-            # Ask Mistral to process the extracted text
-            result = ask_mistral_model(prompt, extracted_text)
-            st.subheader("Extracted Information")
-            st.write(result)
+                invoice_text = extract_text_from_pdf(tmp_file_path)
+
+            st.subheader("Extracted Information:")
+            for chunk in extract_info_from_invoice(invoice_text, user_prompt):
+                st.write(chunk)
+
+            os.unlink(tmp_file_path)
+
+        except Exception as e:
+            st.error(f"An error occurred: {e}")
 
 if __name__ == "__main__":
     main()

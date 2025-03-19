@@ -1,3 +1,4 @@
 streamlit
 ollama
-PyPDF2
+PyPDF2 # Or remove if you are now using PyMuPDF only.
+PyMuPDF

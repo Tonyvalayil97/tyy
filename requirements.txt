@@ -1,5 +1,6 @@
 streamlit
 requests
-PyMuPDF
 pillow
 pytesseract
+PyMuPDF==1.21.1
+

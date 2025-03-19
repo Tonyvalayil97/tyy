@@ -93,15 +93,22 @@ if uploaded_file is not None:
             all_splits = text_splitter.split_documents(data)
 
             # Create and persist the vector store
-            st.session_state.vectorstore = Chroma.from_documents(
-                documents=all_splits,
-                embedding=OllamaEmbeddings(model="mistral"),
-                persist_directory='jj'
-            )
-            st.session_state.vectorstore.persist()
+            try:
+                st.session_state.vectorstore = Chroma.from_documents(
+                    documents=all_splits,
+                    embedding=OllamaEmbeddings(model="mistral"),
+                    persist_directory='jj'
+                )
+                st.session_state.vectorstore.persist()
+                st.success("Vector store created successfully!")
+            except Exception as e:
+                st.error(f"Error creating vector store: {e}")
 
     # Initialize the retriever
-    st.session_state.retriever = st.session_state.vectorstore.as_retriever()
+    if st.session_state.vectorstore is not None:
+        st.session_state.retriever = st.session_state.vectorstore.as_retriever()
+    else:
+        st.error("Vector store is not initialized. Please upload a valid PDF file.")
 
     # Initialize the QA chain if not already initialized
     if 'qa_chain' not in st.session_state:

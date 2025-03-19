@@ -1,4 +1,4 @@
-﻿langchain==0.1.13
-streamlit==1.32.2
+﻿langchain
+streamlit
 chromadb
-pypdf==4.1.0
+pypdf

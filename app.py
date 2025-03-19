@@ -1,81 +1,102 @@
-# streamlit_app.py (or whatever you name your main Streamlit file)
-
 import streamlit as st
-import ollama
-import io
-import tempfile
 import os
 import base64
-import PyPDF2  # Ensure this is in your requirements.txt
+from llama_index.core import StorageContext, load_index_from_storage, VectorStoreIndex, SimpleDirectoryReader, ChatPromptTemplate, Settings
+from llama_index.llms.huggingface import HuggingFaceInferenceAPI
+from dotenv import load_dotenv
+from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+from langdetect import detect
+import subprocess
 
-def get_ollama_response(prompt, model="mistral"):
-    """Gets a response from the Ollama model."""
-    try:
-        response = ollama.chat(model=model, messages=[{'role': 'user', 'content': prompt}], stream=True)
-        full_response = ""
-        for chunk in response:
-            if 'message' in chunk and 'content' in chunk['message']:
-                full_response += chunk['message']['content']
-                yield chunk['message']['content']
-        return full_response
+# Load environment variables
+load_dotenv()
 
-    except Exception as e:
-        yield f"Error: {e}"
-        return f"Error: {e}"
+# Setup HuggingFace API token from environment
+hf_token = os.getenv("HUGGINGFACE_TOKEN")
 
-def extract_text_from_pdf(file_path):
-    """Extracts text from a PDF file."""
-    text = ""
-    try:
-        with open(file_path, "rb") as file:
-            reader = PyPDF2.PdfReader(file)
-            for page in reader.pages:
-                text += page.extract_text() or ""
-    except Exception as e:
-        st.error(f"Error extracting text from PDF: {e}")
-        return ""
-    return text
+# Configure Llama Index settings to use GPU (if available)
+Settings.llm = HuggingFaceInferenceAPI(
+    model_name="mistralai/Mistral-7B-Instruct-v0.3",
+    tokenizer_name="mistralai/Mistral-7B-Instruct-v0.3",
+    context_window=5000,
+    max_new_tokens=1024,
+    generate_kwargs={"temperature": 0.1},
+    device=0  # Use GPU 0, set to -1 for CPU
+)
+Settings.embed_model = HuggingFaceEmbedding(
+    model_name="BAAI/bge-small-en-v1.5",
+    device=0  # Use GPU 0, set to -1 for CPU
+)
 
-def extract_info_from_invoice(invoice_content, user_prompt):
-    """Extracts information from the invoice using Ollama and the user's prompt."""
-    combined_prompt = f"Here is the invoice content:\n\n{invoice_content}\n\nUser prompt: {user_prompt}\n\nExtract and provide the requested information."
+# Define the directory for persistent storage and data
+PERSIST_DIR = "./db"
+DATA_DIR = "data"
 
-    return get_ollama_response(combined_prompt)
+# Ensure data directory exists
+os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(PERSIST_DIR, exist_ok=True)
 
-def display_pdf(file_bytes):
-    """Displays a PDF in the Streamlit app."""
-    base64_pdf = base64.b64encode(file_bytes).decode('utf-8')
-    pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="700" height="1000" type="application/pdf"></iframe>'
+def display_pdf(file_path):
+    with open(file_path, "rb") as f:
+        base64_pdf = base64.b64encode(f.read()).decode('utf-8')
+    pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="600" type="application/pdf"></iframe>'
+    return pdf_display
+
+def data_ingestion():
+    documents = SimpleDirectoryReader(DATA_DIR).load_data()
+    storage_context = StorageContext.from_defaults()
+    index = VectorStoreIndex.from_documents(documents)
+    index.storage_context.persist(persist_dir=PERSIST_DIR)
+
+def handle_query(query, lang):
+    storage_context = StorageContext.from_defaults(persist_dir=PERSIST_DIR)
+    index = load_index_from_storage(storage_context)
+    chat_text_qa_msgs = [
+    (
+        "user",
+        """You are a Q&A assistant. Your main goal is to provide answers as accurately as possible, based on the instructions and context you have been given. If a question does not match the provided context or is outside the scope of the document, kindly advise the user to ask questions within the context of the document.
+        Context:
+        {context_str}
+        Question:
+        {query_str}
+        """
+    )
+    ]
+    text_qa_template = ChatPromptTemplate.from_messages(chat_text_qa_msgs)
+    
+    query_engine = index.as_query_engine(text_qa_template=text_qa_template)
+    answer = query_engine.query(query)
+    
+    if hasattr(answer, 'response'):
+        return answer.response, lang
+    elif isinstance(answer, dict) and 'response' in answer:
+        return answer['response'], lang
+    else:
+        return "Sorry, I couldn't find an answer.", lang
+
+def process_file(uploaded_file):
+    if uploaded_file:
+        filepath = os.path.join(DATA_DIR, "saved_pdf.pdf")
+        with open(filepath, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+        data_ingestion()
+        return display_pdf(filepath)
+    return "No file uploaded."
+
+# Streamlit UI
+st.title("(PDF) Information and Inference 🗞️")
+st.markdown("## Retrieval-Augmented Generation")
+st.markdown("Start chat ...🚀")
+
+uploaded_file = st.file_uploader("Upload your PDF file", type="pdf")
+query = st.text_input("Ask me anything about the content of the PDF:")
+chat_history = st.empty()
+
+if uploaded_file:
+    pdf_display = process_file(uploaded_file)
     st.markdown(pdf_display, unsafe_allow_html=True)
 
-def main():
-    st.title("Invoice Information Extractor")
-
-    uploaded_file = st.file_uploader("Upload an invoice (PDF)", type=["pdf"])
-    user_prompt = st.text_area("Enter your prompt (e.g., 'What is the total amount?', 'What is the invoice number?', 'List all items purchased.')")
-
-    if uploaded_file is not None and user_prompt:
-        try:
-            file_bytes = uploaded_file.read()
-
-            # Display the uploaded PDF
-            display_pdf(file_bytes)
-
-            # Extract text from PDF
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
-                tmp_file.write(file_bytes)
-                tmp_file_path = tmp_file.name
-
-                invoice_text = extract_text_from_pdf(tmp_file_path)
-
-            st.subheader("Extracted Information:")
-            for chunk in extract_info_from_invoice(invoice_text, user_prompt):
-                st.write(chunk)
-
-            os.unlink(tmp_file_path)
-
-        except Exception as e:
-            st.error(f"An error occurred: {e}")
-
-if __name__ == "__main__":
-    main()
+if query:
+    lang = detect(query)
+    response, lang = handle_query(query, lang)
+    chat_history.text_area("Chat History", f"User: {query}\nAssistant: {response}", height=300)

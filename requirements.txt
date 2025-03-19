@@ -1,4 +1,6 @@
-﻿langchain
+langchain
+langchain-community
 streamlit
 chromadb
 pypdf
+sentence-transformers

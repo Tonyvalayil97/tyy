@@ -1,6 +1,5 @@
-langchain
-langchain-community
-streamlit
-chromadb
-pypdf
-sentence-transformers
+streamlit==1.21.0
+requests==2.28.2
+pymupdf==1.21.1
+pillow==9.3.0
+pytesseract==0.3.10

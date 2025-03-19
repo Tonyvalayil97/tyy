@@ -43,10 +43,7 @@ if 'memory' not in st.session_state:
     )
 
 if 'vectorstore' not in st.session_state:
-    st.session_state.vectorstore = Chroma(
-        persist_directory='jj',
-        embedding_function=OllamaEmbeddings(model="mistral")
-    )
+    st.session_state.vectorstore = None  # Initialize as None
 
 if 'llm' not in st.session_state:
     st.session_state.llm = Ollama(
